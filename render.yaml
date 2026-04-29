@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: hive-stable-yield-curve
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SERVICE_URL
+        value: https://hive-stable-yield-curve.onrender.com
+      - key: PORT
+        value: "3000"
+    disk:
+      name: subs-data
+      mountPath: /app/data
+      sizeGB: 1
+    healthCheckPath: /health

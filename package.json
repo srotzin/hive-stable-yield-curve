@@ -1,0 +1,38 @@
+{
+  "name": "hive-stable-yield-curve",
+  "version": "1.0.0",
+  "description": "Implied forward curve on USDC/USDT stable-to-stable swap rates. On-chain TWAP from Uniswap v3 on Base.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "ethers": "^6.13.4",
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "uniswap",
+    "twap",
+    "stable",
+    "usdc",
+    "usdt",
+    "base",
+    "mcp",
+    "x402",
+    "hive",
+    "defi",
+    "yield-curve"
+  ],
+  "author": "The Hivery <steve@thehiveryiq.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/srotzin/hive-stable-yield-curve.git"
+  },
+  "homepage": "https://github.com/srotzin/hive-stable-yield-curve#readme"
+}

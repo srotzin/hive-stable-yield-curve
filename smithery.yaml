@@ -1,0 +1,58 @@
+name: hive-stable-yield-curve
+version: 1.0.0
+description: >
+  Implied forward curve on USDC/USDT stable-to-stable swap rates.
+  On-chain TWAP from Uniswap v3 USDC/USDT 0.01% pool on Base mainnet.
+  Pay-per-quote ($0.001 USDC x402) or subscription ($99/30 days).
+
+author: The Hivery
+homepage: https://github.com/srotzin/hive-stable-yield-curve
+license: MIT
+
+server:
+  type: http
+  url: https://hive-stable-yield-curve.onrender.com/mcp
+  transport: streamable-http
+
+tools:
+  - name: get_curve
+    description: >
+      Returns the implied forward curve on USDC/USDT stable-to-stable swap rates.
+      Derived from on-chain TWAP (Uniswap v3 Base). Gated by $0.001 USDC x402
+      or subscription bearer token. Curve points: 1h, 6h, 24h, 7d.
+      Returns null for points with insufficient observations — never fabricated.
+    payment:
+      required: true
+      scheme: x402
+      network: base
+      asset: USDC
+      amount: "1000"
+      payTo: "0x15184bf50b3d3f52b60434f8942b7d52f2eb436e"
+
+  - name: get_spot
+    description: >
+      Returns the current spot exchange rate for USDC/USDT from Uniswap v3 slot0
+      on Base mainnet. Gated by $0.001 USDC x402 or subscription bearer token.
+    payment:
+      required: true
+      scheme: x402
+      network: base
+      asset: USDC
+      amount: "1000"
+      payTo: "0x15184bf50b3d3f52b60434f8942b7d52f2eb436e"
+
+  - name: get_methodology
+    description: >
+      Returns the public methodology document describing how TWAP rates and
+      forward curves are computed. No payment required.
+    payment:
+      required: false
+
+tags:
+  - finance
+  - defi
+  - stable
+  - uniswap
+  - twap
+  - base
+  - x402
