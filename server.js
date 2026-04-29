@@ -134,9 +134,39 @@ function validatePaymentHeader(header) {
   }
 }
 
+// ─── BOGO redemption middleware (X-Hive-BOGO-Token) ─────────────────────────
+// Phase 1: calls hive-gamification /v1/bogo/redeem; bypasses 402 on consumed:true.
+// Phase 2 (planned): zero-trust redemption with token-bound HMAC.
+async function bogoRedeemMiddleware(req, res, next) {
+  const token = req.headers['x-hive-bogo-token'];
+  if (!token) return next();
+  try {
+    const r = await fetch('https://hive-gamification.onrender.com/v1/bogo/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, mechanic_id: 'stable-curve-quote' }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (r.ok) {
+      const j = await r.json();
+      if (j.consumed === true) {
+        req._bogo_redeemed = true;
+        import('fs').then(({ appendFileSync }) => {
+          try { appendFileSync('/tmp/stable_yield_curve_bogo_redemptions.jsonl', JSON.stringify({ token: token.slice(0, 12), mechanic_id: 'stable-curve-quote', ts: Date.now() }) + '\n'); } catch (_) {}
+        });
+        return next();
+      }
+    }
+  } catch (_) {}
+  return next();
+}
+
 // ─── Middleware: 402 gate ─────────────────────────────────────────────────────
 
 function require402(req, res, next) {
+  // BOGO token was consumed upstream — bypass 402 for this call
+  if (req._bogo_redeemed) return next();
+
   // Check subscription bearer first
   const auth = req.headers['authorization'] || '';
   if (auth.startsWith('Bearer hsyc_')) {
@@ -159,6 +189,12 @@ function require402(req, res, next) {
     .json({
       error: 'Payment required.',
       x402: challenge,
+      bogo: {
+        first_use_free: true,
+        claim_endpoint: 'https://hive-gamification.onrender.com/v1/bogo/claim',
+        redeem_header: 'X-Hive-BOGO-Token',
+        mechanic_id: 'stable-curve-quote',
+      },
     });
 }
 
@@ -379,7 +415,7 @@ Curve points:
 
 // ─── Curve endpoint ───────────────────────────────────────────────────────────
 
-app.get('/v1/stable-curve/:pair', require402, async (req, res) => {
+app.get('/v1/stable-curve/:pair', bogoRedeemMiddleware, require402, async (req, res) => {
   const pair = req.params.pair.toLowerCase();
   if (!['usdc-usdt', 'usdt-usdc'].includes(pair)) {
     return res.status(400).json({ error: 'Invalid pair. Supported: usdc-usdt, usdt-usdc.' });
