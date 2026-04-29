@@ -1085,13 +1085,16 @@ app.get('/v1/yield/predictive', requirePremium, (req, res) => {
   const result = buildPredictiveCurve(asset, horizonHours);
 
   if (!result.ok) {
-    return res.status(503).json({
-      error: 'Predictive curve unavailable.',
+    // Use 200 with available:false — Render's load balancer intercepts 503.
+    // Callers must check `available` field before consuming `forecast`.
+    return res.status(200).json({
+      available: false,
       reason: result.reason,
       detail: `Minimum ${result.required_days} days of history required. Current span: ${result.history_span_days || 0} days (${result.history_points} observation points). The predictive endpoint will activate automatically once sufficient history accumulates.`,
       history_points: result.history_points,
       required_days: result.required_days,
       estimated_available: new Date(Date.now() + (result.required_days - (result.history_span_days || 0)) * 24 * 3600 * 1000).toISOString(),
+      brand: '#C08D23',
     });
   }
 
