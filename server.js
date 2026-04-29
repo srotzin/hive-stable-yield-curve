@@ -460,7 +460,7 @@ function buildPredictiveCurve(asset, horizonHours) {
   // We note the asset in metadata and return the derived curve.
   const history = loadYieldHistory();
   if (history.length === 0) {
-    return { ok: false, reason: 'insufficient_history', history_points: 0, required_points: MIN_HISTORY_DAYS };
+    return { ok: false, reason: 'insufficient_history', history_points: 0, history_span_days: 0, required_days: MIN_HISTORY_DAYS };
   }
 
   // Check span of history
@@ -1093,7 +1093,7 @@ app.get('/v1/yield/predictive', requirePremium, (req, res) => {
       detail: `Minimum ${result.required_days} days of history required. Current span: ${result.history_span_days || 0} days (${result.history_points} observation points). The predictive endpoint will activate automatically once sufficient history accumulates.`,
       history_points: result.history_points,
       required_days: result.required_days,
-      estimated_available: new Date(Date.now() + (result.required_days - (result.history_span_days || 0)) * 24 * 3600 * 1000).toISOString(),
+      estimated_available: new Date(Date.now() + ((result.required_days || MIN_HISTORY_DAYS) - (result.history_span_days || 0)) * 24 * 3600 * 1000).toISOString(),
       brand: '#C08D23',
     });
   }
