@@ -1066,12 +1066,28 @@ app.post('/v1/yield/subscribe', async (req, res) => {
 // Returns 401 without valid premium subscription.
 // Returns 503 with reason:insufficient_history if < 30 days of history.
 
+// Assets not seeded: no live Uniswap v3 pool found on Base at launch.
+// These return asset_not_seeded (not insufficient_history) until a pool exists.
+const ASSETS_NOT_SEEDED = new Set(['PYUSD', 'RLUSD']);
+
 app.get('/v1/yield/predictive', requirePremium, (req, res) => {
   const asset = (req.query.asset || 'USDC').toUpperCase();
   const validAssets = ['USDC', 'USDT', 'PYUSD', 'RLUSD', 'DAI'];
   if (!validAssets.includes(asset)) {
     return res.status(400).json({
       error: `Invalid asset. Supported: ${validAssets.join(', ')}.`,
+    });
+  }
+
+  // Assets with no live pool on Base — return explicit asset_not_seeded
+  if (ASSETS_NOT_SEEDED.has(asset)) {
+    return res.status(503).json({
+      available: false,
+      reason: 'asset_not_seeded',
+      asset,
+      detail: `${asset}/USDC: no live Uniswap v3 pool found on Base mainnet at launch. ` +
+              'Asset will be added to the yield curve once a qualifying pool is deployed and seeded.',
+      brand: '#C08D23',
     });
   }
 
@@ -1281,6 +1297,145 @@ app.post('/mcp', async (req, res) => {
 
 app.get('/mcp', (req, res) => {
   res.json({ name: 'hive-stable-yield-curve', version: '2.0.0', protocol: 'MCP 2024-11-05', description: 'Implied forward curve on USDC/USDT. Premium: predictive curve + alert webhooks.', endpoint: `${SERVICE_URL}/mcp`, tools: ['get_curve','get_spot','get_methodology','get_predictive'] });
+});
+
+// ─── ADMIN: POST /v1/yield/admin/seed ────────────────────────────────────────
+// Accepts newline-delimited JSON records matching yield_history.jsonl schema.
+// Gated by SEED_ADMIN_TOKEN env var (set on Render). One-time use for seeding
+// historical Uniswap v3 observations recovered from the ring buffer.
+//
+// Request:
+//   Content-Type: application/x-ndjson
+//   X-Seed-Admin-Token: <token>
+//   Body: newline-delimited JSON records (yield_history schema)
+//
+// Response: { accepted, rejected, total, seed_window_start, seed_window_end }
+//
+// Bloomberg Terminal: Only records with source="uniswap_v3_observation" accepted.
+// No synthetic data. Records are appended in chronological order before any
+// existing organic records.
+
+const SEED_ADMIN_TOKEN = process.env.SEED_ADMIN_TOKEN || null;
+
+app.post('/v1/yield/admin/seed', express.text({ type: ['application/x-ndjson', 'text/plain'], limit: '10mb' }), (req, res) => {
+  // Auth check
+  const token = req.headers['x-seed-admin-token'] || req.headers['authorization']?.replace('Bearer ', '');
+  if (!SEED_ADMIN_TOKEN) {
+    return res.status(503).json({ error: 'Seed endpoint disabled: SEED_ADMIN_TOKEN not configured.' });
+  }
+  if (!token || token !== SEED_ADMIN_TOKEN) {
+    return res.status(401).json({ error: 'Invalid or missing X-Seed-Admin-Token.' });
+  }
+
+  // Parse NDJSON body — body is already a string thanks to express.text middleware
+  const parseAndRespond = (rawBody) => {
+    const lines = rawBody.split('\n').map(l => l.trim()).filter(Boolean);
+    const accepted = [];
+    const rejected = [];
+
+    for (const line of lines) {
+      try {
+        const record = JSON.parse(line);
+        // Validate required fields
+        if (typeof record.ts !== 'number') { rejected.push({ line: line.slice(0, 80), reason: 'missing ts' }); continue; }
+        if (typeof record.spot !== 'number' || !isFinite(record.spot)) { rejected.push({ line: line.slice(0, 80), reason: 'invalid spot' }); continue; }
+        if (typeof record.curve !== 'object') { rejected.push({ line: line.slice(0, 80), reason: 'missing curve' }); continue; }
+        if (record.source !== 'uniswap_v3_observation') { rejected.push({ line: line.slice(0, 80), reason: 'source must be uniswap_v3_observation' }); continue; }
+        // Sanity check: spot must be a stablecoin price (0.9 to 1.1)
+        if (record.spot < 0.9 || record.spot > 1.1) { rejected.push({ line: line.slice(0, 80), reason: `spot out of range: ${record.spot}` }); continue; }
+        accepted.push(record);
+      } catch (e) {
+        rejected.push({ line: line.slice(0, 80), reason: `parse error: ${e.message}` });
+      }
+    }
+
+    if (accepted.length === 0) {
+      return res.status(400).json({ error: 'No valid records', rejected: rejected.slice(0, 10) });
+    }
+
+    // Sort accepted records chronologically
+    accepted.sort((a, b) => a.ts - b.ts);
+
+    // Load existing history, merge, deduplicate, re-sort
+    const existing = loadYieldHistory();
+    const existingTsSet = new Set(existing.map(r => r.ts));
+    const newRecords = accepted.filter(r => !existingTsSet.has(r.ts));
+    const merged = [...accepted, ...existing].sort((a, b) => a.ts - b.ts);
+
+    // Deduplicate by ts (keep first occurrence)
+    const seen = new Set();
+    const deduped = merged.filter(r => {
+      if (seen.has(r.ts)) return false;
+      seen.add(r.ts);
+      return true;
+    });
+
+    // Write back as JSONL
+    try {
+      fs.writeFileSync(YIELD_HISTORY_FILE, deduped.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf8');
+    } catch (e) {
+      return res.status(500).json({ error: `Failed to write history: ${e.message}` });
+    }
+
+    const seedRecords = deduped.filter(r => r.source === 'uniswap_v3_observation');
+    const organicRecords = deduped.filter(r => r.source !== 'uniswap_v3_observation');
+    const seedWindow = seedRecords.length > 0 ? {
+      seed_window_start: new Date(seedRecords[0].ts).toISOString(),
+      seed_window_end: new Date(seedRecords[seedRecords.length - 1].ts).toISOString(),
+    } : {};
+
+    console.log(`[seed] Accepted ${newRecords.length} new records, ${accepted.length - newRecords.length} duplicates, ${rejected.length} rejected. Total history: ${deduped.length}`);
+
+    res.json({
+      accepted: newRecords.length,
+      duplicates_skipped: accepted.length - newRecords.length,
+      rejected: rejected.length,
+      total_history: deduped.length,
+      seeded: seedRecords.length,
+      organic: organicRecords.length,
+      ...seedWindow,
+    });
+  };
+
+  // Body is parsed by express.text middleware
+  parseAndRespond(req.body || '');
+});
+
+// ─── AUDIT: GET /v1/yield/history/audit ──────────────────────────────────────
+// Returns counts of seeded vs organic records, window bounds, and span.
+// No auth required — public audit trail for seed provenance transparency.
+
+app.get('/v1/yield/history/audit', (req, res) => {
+  const history = loadYieldHistory();
+  if (history.length === 0) {
+    return res.json({
+      total: 0, seeded: 0, organic: 0,
+      seed_window_start: null, seed_window_end: null,
+      organic_window_start: null, organic_window_end: null,
+      span_days: 0,
+    });
+  }
+
+  const seeded = history.filter(r => r.source === 'uniswap_v3_observation');
+  const organic = history.filter(r => r.source !== 'uniswap_v3_observation');
+
+  const oldest = history[0].ts;
+  const newest = history[history.length - 1].ts;
+  const spanDays = (newest - oldest) / (24 * 3600 * 1000);
+
+  res.json({
+    total: history.length,
+    seeded: seeded.length,
+    organic: organic.length,
+    seed_window_start: seeded.length > 0 ? new Date(seeded[0].ts).toISOString() : null,
+    seed_window_end: seeded.length > 0 ? new Date(seeded[seeded.length - 1].ts).toISOString() : null,
+    organic_window_start: organic.length > 0 ? new Date(organic[0].ts).toISOString() : null,
+    organic_window_end: organic.length > 0 ? new Date(organic[organic.length - 1].ts).toISOString() : null,
+    span_days: Math.round(spanDays * 100) / 100,
+    required_days: MIN_HISTORY_DAYS,
+    predictive_available: spanDays >= MIN_HISTORY_DAYS,
+    brand: '#C08D23',
+  });
 });
 
 app.get('/.well-known/mcp.json', (req, res) => {
