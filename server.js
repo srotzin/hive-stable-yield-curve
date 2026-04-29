@@ -1401,6 +1401,47 @@ app.post('/v1/yield/admin/seed', express.text({ type: ['application/x-ndjson', '
   parseAndRespond(req.body || '');
 });
 
+// ─── ADMIN: POST /v1/yield/admin/test-premium-token ────────────────────────────
+// Creates a test premium token (30-day validity) for verifying the predictive
+// endpoint after seeding. Gated by SEED_ADMIN_TOKEN. One-time use.
+
+app.post('/v1/yield/admin/test-premium-token', (req, res) => {
+  const token_header = req.headers['x-seed-admin-token'] || req.headers['authorization']?.replace('Bearer ', '');
+  if (!SEED_ADMIN_TOKEN || token_header !== SEED_ADMIN_TOKEN) {
+    return res.status(401).json({ error: 'Invalid or missing X-Seed-Admin-Token.' });
+  }
+
+  const premiumToken = 'hsycp_' + crypto.randomBytes(32).toString('hex');
+  const webhook_secret = crypto.randomBytes(32).toString('hex');
+  const now = Date.now();
+  const expires_at = now + 30 * 24 * 60 * 60 * 1000;
+  const subscription_id = 'psub_seed_test_' + crypto.randomBytes(8).toString('hex');
+
+  const sub = {
+    subscription_id,
+    token: premiumToken,
+    webhook_secret,
+    payer_did: 'seed_admin_test',
+    created_at: now,
+    expires_at,
+    amount_paid: '0',
+    currency: 'USDC',
+    network: 'base',
+    status: 'active',
+    tier: 'premium',
+    note: 'test token created by seed admin for post-seed verification',
+  };
+  appendPremiumSub(sub);
+
+  res.json({
+    token: premiumToken,
+    subscription_id,
+    expires_at: new Date(expires_at).toISOString(),
+    header: `Authorization: Bearer ${premiumToken}`,
+    note: 'Test token. Valid 30 days. Use for verification only.',
+  });
+});
+
 // ─── AUDIT: GET /v1/yield/history/audit ──────────────────────────────────────
 // Returns counts of seeded vs organic records, window bounds, and span.
 // No auth required — public audit trail for seed provenance transparency.
