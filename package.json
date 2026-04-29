@@ -1,7 +1,7 @@
 {
   "name": "hive-stable-yield-curve",
-  "version": "1.0.0",
-  "description": "Implied forward curve on USDC/USDT stable-to-stable swap rates. On-chain TWAP from Uniswap v3 on Base.",
+  "version": "2.0.0",
+  "description": "Implied forward curve on USDC/USDT stable-to-stable swap rates. On-chain TWAP from Uniswap v3 on Base. Premium tier: predictive curve + alert webhooks.",
   "type": "module",
   "main": "server.js",
   "scripts": {
